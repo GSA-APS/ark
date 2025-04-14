@@ -3,7 +3,7 @@ import csv
 import re
 import os
 
-# Folder path and output CSV file
+# Folder path and output CSV file, script will loop through each file
 PDF_FOLDER = "Contracts"
 OUTPUT_CSV = "output.csv"
 DEBUG_LOG = "debug_log.txt"
