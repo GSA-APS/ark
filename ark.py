@@ -134,6 +134,63 @@ def extract_lineitem_title(match):
 
     return " ".join(cleaned_tokens).strip()
 
+def extract_multiline_title(lines, start_index, parsed_values):
+    cutoff_prefixes = [
+        "Qty", "Award Type", "Obligated Amount", "Continued", "FOB", "Delivery",
+        "Packaging", "Inspection", "Period of Performance", "Ceiling Amount",
+        "Accounting Info", "Signature"
+    ]
+
+    # Pull values for targeted cleanup
+    clin = parsed_values.get("clin", "")
+    quantity = parsed_values.get("quantity", "")
+    unit = parsed_values.get("unit", "")
+    amount = parsed_values.get("amount", "")
+    unit_price = parsed_values.get("unit_price", "")
+    flags = parsed_values.get("flags", [])
+
+    title_lines = []
+    for i in range(start_index, len(lines)):
+        line = lines[i].strip()
+        if any(line.startswith(prefix) for prefix in cutoff_prefixes):
+            break
+        title_lines.append(line)
+
+    # Step 1: Combine lines
+    full_title = " ".join(title_lines).strip()
+
+    # Normalize parsed values for comparison
+    quantity = parsed_values.get("quantity", "").strip()
+    unit = parsed_values.get("unit", "").strip()
+    amount = parsed_values.get("amount", "").replace(",", "").replace("$", "").strip()
+    unit_price = parsed_values.get("unit_price", "").replace(",", "").replace("$", "").strip()
+    flags = parsed_values.get("flags", [])
+    clin = parsed_values.get("clin", "").strip()
+
+    # Log what we're trying to remove
+    log_debug(f"--- Title Cleanup Start ---")
+    log_debug(f"Raw Title Lines: {' | '.join(title_lines)}")
+    log_debug(f"Parsed values: quantity={quantity}, unit={unit}, unit_price={unit_price}, amount={amount}, flags={flags}, clin={clin}")
+
+    # Strip CLIN/SLIN code from start if present
+    if clin and full_title.startswith(clin):
+        full_title = full_title[len(clin):].strip()
+
+    # Token-based stripping
+    tokens = full_title.split()
+    cleaned_tokens = []
+    for token in tokens:
+        normalized = token.replace(",", "").replace("$", "")
+        if normalized in [quantity, unit_price, amount] or token in flags or token == unit:
+            log_debug(f"Removing token from title: {token}")
+            continue
+        cleaned_tokens.append(token)
+
+    cleaned_title = " ".join(cleaned_tokens).strip()
+    log_debug(f"Cleaned Title: {cleaned_title}")
+    log_debug(f"--- Title Cleanup End ---")
+    return cleaned_title
+
 def extract_lineitem_quantity(match, is_slin):
     text_segment = match.group(2)
     tokens = text_segment.split()
@@ -151,11 +208,19 @@ def extract_lineitem_quantity(match, is_slin):
 def extract_lineitem_unit_price(match, is_slin):
     text_segment = match.group(2)
     tokens = text_segment.split()
-    prices = [t for t in tokens if re.fullmatch(r"\$?\d{1,3}(?:,\d{3})*(?:\.\d{2})", t)]
-    return prices[-1].replace("$", "") if len(prices) > 1 else "N/A"
+    for token in reversed(tokens):
+        if token.upper() == "NSP":
+            return "NSP"
+        if re.fullmatch(r"\$?\d{1,3}(?:,\d{3})*(?:\.\d{2})", token):
+            return token.replace("$", "")
+    return ""
 
 def extract_lineitem_amount(match):
-    return match.group(3).replace("$", "")
+    try:
+        value = match.group(3).strip()
+        return value if value.upper() == "NSP" or re.fullmatch(r"\$?\d{1,3}(?:,\d{3})*(?:\.\d{2})?", value) else ""
+    except IndexError:
+        return ""
 
 def extract_lineitem_unit(match, is_slin):
     text_segment = match.group(2).split()
@@ -172,7 +237,7 @@ def parse_line_items_from_text(text):
     lines = text.split("\n")
     line_items = []
     capture = False
-    pattern = re.compile(r"^(\d{4}[A-Z]{0,2})\s+(.*?)\s+(\$?\d{1,3}(?:,\d{3})*(?:\.\d{2})?)$")
+    pattern = re.compile(r"^(\d{4}[A-Z]{0,2})\s+(.*)")
 
     for i, line in enumerate(lines):
         if "ITEM NO." in line or "SCHEDULE OF SUPPLIES/SERVICES" in line:
@@ -187,14 +252,37 @@ def parse_line_items_from_text(text):
             if match:
                 clin, slin = extract_lineitem_clin_or_slin(match)
                 is_slin = slin != "N/A"
+
+                # Extract all other values first
+                quantity = extract_lineitem_quantity(match, is_slin)
+                unit = extract_lineitem_unit(match, is_slin)
+                unit_price = extract_lineitem_unit_price(match, is_slin)
+                amount = extract_lineitem_amount(match)
+
+                # NSP check: if unit price or amount is NSP, include that as a flag
+                flags = []
+                if unit_price.upper() == "NSP" or amount.upper() == "NSP":
+                    flags.append("NSP")
+
+                parsed_values = {
+                    "clin": slin if is_slin else clin,
+                    "quantity": quantity,
+                    "unit": unit,
+                    "unit_price": unit_price,
+                    "amount": amount,
+                    "flags": flags
+                }
+
+                title_text = extract_multiline_title(lines, i, parsed_values)
+
                 item = {
                     "CLIN": clin,
                     "SLIN": slin,
-                    "Title": extract_lineitem_title(match),
-                    "Quantity": extract_lineitem_quantity(match, is_slin),
-                    "Estimated Unit Price ($)": extract_lineitem_unit_price(match, is_slin),
-                    "Amount ($)": extract_lineitem_amount(match),
-                    "Unit": extract_lineitem_unit(match, is_slin),
+                    "Title": title_text,
+                    "Quantity": quantity,
+                    "Estimated Unit Price ($)": unit_price,
+                    "Amount ($)": amount,
+                    "Unit": unit,
                     "Amount Committed ($)": extract_lineitem_amount_committed(match),
                     "Amount Reserved ($)": extract_lineitem_amount_reserved(match),
                     "Optional": extract_lineitem_optional(match),
