@@ -71,43 +71,6 @@ def parse_text_content(text):
     return structured_fields
 
 # -----------------------------
-# Placeholder Line Item Field Extractors
-# -----------------------------
-
-def extract_lineitem_optional(match):
-    return "N/A"
-
-def extract_lineitem_not_to_exceed(match):
-    return "N/A"
-
-def extract_lineitem_description(match):
-    return "N/A"
-
-def extract_lineitem_pop_start_date(match):
-    return "N/A"
-
-def extract_lineitem_pop_end_date(match):
-    return "N/A"
-
-def extract_lineitem_group(match):
-    return "N/A"
-
-def extract_lineitem_line_item_type(match):
-    return "N/A"
-
-def extract_lineitem_nsp(match):
-    return "N/A"
-
-def extract_lineitem_place_of_performance(match):
-    return "N/A"
-
-def extract_lineitem_amount_committed(match):
-    return "N/A"
-
-def extract_lineitem_amount_reserved(match):
-    return "N/A"
-
-# -----------------------------
 # Line Item Extractors
 # -----------------------------
 
@@ -206,27 +169,103 @@ def extract_lineitem_quantity(match, is_slin):
     return "N/A"
 
 def extract_lineitem_unit_price(match, is_slin):
-    text_segment = match.group(2)
-    tokens = text_segment.split()
-    for token in reversed(tokens):
-        if token.upper() == "NSP":
-            return "NSP"
-        if re.fullmatch(r"\$?\d{1,3}(?:,\d{3})*(?:\.\d{2})", token):
-            return token.replace("$", "")
-    return ""
-
-def extract_lineitem_amount(match):
     try:
-        value = match.group(3).strip()
-        return value if value.upper() == "NSP" or re.fullmatch(r"\$?\d{1,3}(?:,\d{3})*(?:\.\d{2})?", value) else ""
-    except IndexError:
-        return ""
+        full_line = match.group(0).strip()
+
+        # Find all valid dollar values or NSP
+        tokens = re.findall(r"\$?\d{1,3}(?:,\d{3})*(?:\.\d{2})|NSP", full_line, flags=re.IGNORECASE)
+
+        if len(tokens) >= 2:
+            return tokens[-2].replace("$", "")
+        elif len(tokens) == 1:
+            return "N/A"  # That one value is already the amount
+    except Exception as e:
+        log_debug(f"[ERROR] extract_lineitem_unit_price failed: {e}")
+
+    return "N/A"
 
 def extract_lineitem_unit(match, is_slin):
     text_segment = match.group(2).split()
     for token in text_segment:
         if token in VALID_UNIT:
             return token
+    return "N/A"
+
+def extract_lineitem_amount(match):
+    try:
+        line = match.group(0).strip()
+        tokens = line.split()
+
+        for token in reversed(tokens):
+            cleaned = token.replace("$", "").strip()
+            if cleaned.upper() == "NSP":
+                return "NSP"
+            if re.fullmatch(r"\d{1,3}(?:,\d{3})*(?:\.\d{2})", cleaned):
+                return cleaned
+    except Exception as e:
+        log_debug(f"[ERROR] extract_lineitem_amount failed: {e}")
+
+    return "N/A"
+
+# -----------------------------
+# Placeholder Line Item Field Extractors
+# -----------------------------
+
+def extract_lineitem_amount_committed(match):
+    return "N/A"
+
+def extract_lineitem_amount_reserved(match):
+    return "N/A"
+
+def extract_lineitem_optional(match):
+    text = match.group(0).lower()
+    if "option period" in text:
+        return "Option Period"
+    if "optional goods or services" in text:
+        return "Optional Goods or Services"
+    if "alternate" in text:
+        return "Alternate"
+    return "Not Applicable"
+
+def extract_lineitem_not_to_exceed(match):
+    text = match.group(0).lower()
+    if "not to exceed quantity and price" in text:
+        return "Both"
+    if "not to exceed quantity" in text:
+        return "Quantity"
+    if "not to exceed price" in text:
+        return "Price"
+    return "Not Applicable"
+
+def extract_lineitem_description(match):
+    return match.group(0).strip()
+
+def extract_lineitem_pop_start_date(match):
+    text = match.group(0)
+    dates = re.findall(r"\b\d{2}/\d{2}/\d{4}\b", text)
+    return dates[0] if len(dates) >= 1 else "N/A"
+
+def extract_lineitem_pop_end_date(match):
+    text = match.group(0)
+    dates = re.findall(r"\b\d{2}/\d{2}/\d{4}\b", text)
+    return dates[1] if len(dates) >= 2 else "N/A"
+
+def extract_lineitem_group(match):
+    return "N/A"
+
+def extract_lineitem_line_item_type(match):
+    text = match.group(0).lower()
+    if "nsn" in text or "not separately priced" in text:
+        return "Informational"
+    if re.search(r"\$?\d{1,3}(?:,\d{3})*(?:\.\d{2})", text):
+        return "Deliverable"
+    return "Informational"
+
+def extract_lineitem_nsp(match):
+    text = match.group(0).lower()
+    return "Yes" if "not separately priced" in text else "No"
+
+def extract_lineitem_place_of_performance(match):
     return "N/A"
 
 # -----------------------------
@@ -281,8 +320,8 @@ def parse_line_items_from_text(text):
                     "Title": title_text,
                     "Quantity": quantity,
                     "Estimated Unit Price ($)": unit_price,
-                    "Amount ($)": amount,
                     "Unit": unit,
+                    "Amount ($)": amount,
                     "Amount Committed ($)": extract_lineitem_amount_committed(match),
                     "Amount Reserved ($)": extract_lineitem_amount_reserved(match),
                     "Optional": extract_lineitem_optional(match),
